@@ -1,0 +1,19 @@
+version = "@VERSION@"
+description = "Resolve URIs into Lwt channels under Unix"
+requires = "@META_REQUIRES@"
+archive(byte) = "uwt-conduit.cma"
+archive(byte, plugin) = "uwt-conduit.cma"
+archive(native) = "uwt-conduit.cmxa"
+archive(native, plugin) = "uwt-conduit.cmxs"
+exists_if = "uwt-conduit.cma"
+
+package "compat" (
+ version = "@VERSION@"
+ description = "compat mode for conduit_lwt"
+ requires = "uwt-conduit @META_REQUIRES@"
+ archive(byte) = "uwt-conduit-compat.cma"
+ archive(byte, plugin) = "uwt-conduit-compat.cma"
+ archive(native) = "uwt-conduit-compat.cmxa"
+ archive(native, plugin) = "uwt-conduit-compat.cmxs"
+ exists_if = "uwt-conduit-compat.cma"
+)

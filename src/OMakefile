@@ -1,0 +1,50 @@
+.DEFAULT: lib
+.PHONY: test
+
+if $(or $(lt $(OCAMLC_VERSION_MAJOR),4),$(and $(eq 4,$(OCAMLC_VERSION_MAJOR)),$(lt $(OCAMLC_VERSION_MINOR),3)))
+	OCAMLFINDFLAGS+= -open Result
+	OCAMLPACKS+= result
+	RESULT_PKG = result
+	export
+else
+	RESULT_PKG = $(EMPTY)
+	export
+
+META_REQUIRES=conduit.lwt uwt.ext sexplib ipaddr.unix uri.services $(RESULT_PKG)
+OCAMLPACKS+= uwt.ext conduit.lwt sexplib ppx_sexp_conv
+
+if $(equal $(HAVE_TLS), true)
+	OCAMLFINDFLAGS+= -pp "cppo -D HAVE_LWT_TLS"
+	export
+else
+	OCAMLFINDFLAGS+= -pp cppo
+	export
+
+section
+	FILES= conduit_uwt resolver_uwt conduit_uwt_helper
+	if $(equal $(HAVE_TLS), true)
+		export
+		OCAMLPACKS+= uwt-tls uwt-random.nocrypto-entropy
+		FILES+= conduit_uwt_tls
+		META_REQUIRES+= uwt-tls uwt-random.nocrypto-entropy
+	Repeat_targets($(FILES))
+	CONDUIT=$(MOCamlLibrary $(PROJNAME),$(FILES))
+	lib:: $(CONDUIT)
+	export CONDUIT META_REQUIRES
+
+section
+	FILES= conduit_uwt_compat
+	Repeat_targets($(FILES))
+	CONDUIT_COMPAT=$(MOCamlLibrary uwt-conduit-compat,$(FILES))
+	lib:: $(CONDUIT_COMPAT)
+	export CONDUIT_COMPAT
+
+ConfReplace(META)
+Install_helper($(PROJNAME),$(CONDUIT) $(CONDUIT_COMPAT))
+
+clean::
+	clean-helper()
+	rm -f oUnit*.log setup.data setup.log *.tar* conduit_config.mlh
+
+distclean:: clean
+	rm -f *~ .*~ setup.ml _oasis *.xz *.gz

@@ -1,0 +1,27 @@
+opam-version: "1.2"
+name: "uwt-conduit"
+version: "0.0.1"
+maintainer: "andreashauptmann@t-online.de"
+authors: [ "andreashauptmann@t-online.de" ]
+homepage: "https://github.com/fdopen/uwt-conduit"
+dev-repo: "https://github.com/fdopen/uwt-conduit.git"
+bug-reports: "https://github.com/fdopen/uwt-conduit/issues"
+build: [["omake" "lib"]]
+install: [["omake" "install"]]
+remove: [
+  ["ocamlfind" "remove" "uwt-conduit"]
+]
+available: [ocaml-version >= "4.02.1"]
+depends: [
+  "uwt" {> "0.0.2"}
+  "conduit" {>= "0.12" & < "0.13"}
+  "lwt"
+  "ppx_sexp_conv" {build}
+  "cppo" {build}
+  "ipaddr"
+  "uri"
+  "sexplib"
+  "ocamlfind" {build}
+  "omake" {build}
+]
+depopts: [ "uwt-tls" ]
