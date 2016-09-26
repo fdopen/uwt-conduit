@@ -158,7 +158,7 @@ let init ?src ?(tls_server_key=`None) () =
             [Unix.AI_PASSIVE;Unix.AI_SOCKTYPE Unix.SOCK_STREAM] )
       ( fun x ->
           match x with
-          | Uwt.Uwt_error _ -> Lwt.return_nil
+          | Unix.Unix_error _ -> Lwt.return_nil
           | x -> Lwt.fail x ) >>= function
     | {Uwt.Dns.ai_addr;_}::_ -> Lwt.return { src= Some ai_addr; tls_server_key }
     | [] -> fail (Failure "Invalid conduit source address specified")
@@ -225,7 +225,7 @@ module Sockaddr_server_tcp = struct
         Uwt.Int_result.to_exn ~name:"tcp_listen" res |> abort
       else
         match Uwt.Tcp.accept server with
-        | Error x -> abort (Uwt.Uwt_error(x,"tcp_accept",""))
+        | Error x -> abort (Unix.Unix_error(Uwt.to_unix_error x,"tcp_accept",""))
         | Ok client ->
           (* TODO: should I really abort if nodelay fails like the Lwt_unix
              solution? *)

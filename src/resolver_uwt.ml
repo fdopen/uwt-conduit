@@ -48,7 +48,7 @@ let system_service name =
        let tls = is_tls_service name in
        Some { Resolver.name; port=s.Unix.s_port; tls })
     (function
-    | Uwt.Uwt_error(Uwt.ENOENT,_,_) -> return_none
+    | Unix.Unix_error(Unix.ENOENT,_,_) -> return_none
     | e -> fail e)
 
 let static_service name =
@@ -83,7 +83,7 @@ let system_resolver service uri =
         ~service:(string_of_int port)
         [Unix.AI_SOCKTYPE Unix.SOCK_STREAM] )
     (function
-    | Uwt_base.Uwt_error _ -> Lwt.return_nil
+    | Unix.Unix_error _ -> Lwt.return_nil
     | x -> Lwt.fail x)
   >>= function
   | [] -> return_endp "system" service uri (`Unknown ("name resolution failed"))
