@@ -40,7 +40,7 @@ section
 	export CONDUIT_COMPAT
 
 ConfReplace(META)
-Install_helper($(PROJNAME),$(CONDUIT) $(CONDUIT_COMPAT))
+Install_helper($(PROJNAME),$(CONDUIT) $(CONDUIT_COMPAT), $(EMPTY))
 
 clean::
 	clean-helper()
