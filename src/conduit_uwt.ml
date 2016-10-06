@@ -151,17 +151,13 @@ let init ?src ?(tls_server_key=`None) () =
   | None ->
     return { src=None; tls_server_key }
   | Some host ->
-    Lwt. catch
-      ( fun () ->
-          Uwt.Dns.getaddrinfo ~host
-            ~service:"0"
-            [Unix.AI_PASSIVE;Unix.AI_SOCKTYPE Unix.SOCK_STREAM] )
-      ( fun x ->
-          match x with
-          | Unix.Unix_error _ -> Lwt.return_nil
-          | x -> Lwt.fail x ) >>= function
-    | {Uwt.Dns.ai_addr;_}::_ -> Lwt.return { src= Some ai_addr; tls_server_key }
-    | [] -> fail (Failure "Invalid conduit source address specified")
+    Uwt.Dns.getaddrinfo ~host
+      ~service:"0"
+      [Unix.AI_PASSIVE;Unix.AI_SOCKTYPE Unix.SOCK_STREAM] >>= function
+    | Ok []
+    | Error _ -> fail (Failure "Invalid conduit source address specified")
+    | Ok ({Uwt.Dns.ai_addr;_}::_) ->
+      Lwt.return { src= Some ai_addr; tls_server_key }
 
 let safe_close t =
   Lwt.catch

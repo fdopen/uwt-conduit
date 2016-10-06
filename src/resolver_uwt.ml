@@ -77,17 +77,14 @@ let get_port service uri =
 let system_resolver service uri =
   let host = get_host uri in
   let port = get_port service uri in
-  Lwt.catch ( fun () ->
-      Uwt.Dns.getaddrinfo
-        ~host
-        ~service:(string_of_int port)
-        [Unix.AI_SOCKTYPE Unix.SOCK_STREAM] )
-    (function
-    | Unix.Unix_error _ -> Lwt.return_nil
-    | x -> Lwt.fail x)
-  >>= function
-  | [] -> return_endp "system" service uri (`Unknown ("name resolution failed"))
-  | (hd::_) as al ->
+  Uwt.Dns.getaddrinfo
+    ~host
+    ~service:(string_of_int port)
+    [Unix.AI_SOCKTYPE Unix.SOCK_STREAM] >>= function
+  | Ok []
+  | Error _ ->
+    return_endp "system" service uri (`Unknown ("name resolution failed"))
+  | Ok ((hd::_) as al) ->
     (* Difference to lwt solution: prefer ipv4 to ipv6 *)
     let ai_addr =
       match List.find ( fun x -> x.Uwt.Dns.ai_family = Unix.PF_INET ) al with
