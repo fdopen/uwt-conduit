@@ -8,4 +8,5 @@ PKG sexplib
 PKG uri.services
 PKG uwt-random.nocrypto-entropy
 PKG uwt-tls
+PKG uwt-ssl
 PKG uwt.ext

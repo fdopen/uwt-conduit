@@ -159,11 +159,6 @@ let init ?src ?(tls_server_key=`None) () =
     | Ok ({Uwt.Dns.ai_addr;_}::_) ->
       Lwt.return { src= Some ai_addr; tls_server_key }
 
-let safe_close t =
-  Lwt.catch
-    (fun () -> Uwt_io.close t)
-    (fun _ -> return_unit)
-
 let try_init_pipe f =
   let t = Uwt.Pipe.init () in
   Lwt.catch
@@ -302,7 +297,7 @@ let connect_with_tls_native ~ctx:_ _ =
 #endif
 
 #ifdef HAVE_LWT_SSL
-let connect_with_openssl ~ctx (`Hostname hostname, `IP ip, `Port port) =
+let connect_with_openssl ~ctx (`Hostname _, `IP ip, `Port port) =
   let sa = Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ip,port) in
   Conduit_uwt_ssl.Client.connect ?src:ctx.src sa >|= fun (fd, ic, oc) ->
   TCP { fd ; ip ; port }, ic, oc

@@ -47,53 +47,13 @@ module Server = struct
     let ic, oc = Tls_uwt.of_t t in
     (fd, ic, oc)
 
-  let process_accept ~timeout callback (cfd, ic, oc) =
-    let c = callback cfd ic oc in
-    let events = match timeout with
-      | None -> [c]
-      | Some t -> [c; (Uwt.Timer.sleep (t * 1_000)) ] in
-    Lwt.pick events
-
-  let init ?(nconn=20) ~certfile ~keyfile
-      ?(stop = fst (Lwt.wait ())) ?timeout sa callback =
+  let init ?nconn ~certfile ~keyfile ?stop ?timeout sa callback =
     rand_init >>= fun () ->
     X509_uwt.private_of_pems ~cert:certfile ~priv_key:keyfile >>= fun cert ->
     (match Tls.Config.server ~certificates:(`Single cert) () with
     |exception x -> Lwt.fail x
     | y -> Lwt.return y) >>= fun conf ->
     try_init_tcp ~sa Lwt.return >>= fun server ->
-    let sleeper,waker = Lwt.wait () in
-    let cb server res =
-      if Uwt.Int_result.is_error res then
-        let () = Uwt.Tcp.close_noerr server in
-        Uwt.Int_result.to_exn ~name:"tcp_listen" res
-        |> Lwt.wakeup_exn waker
-      else
-        let _ : unit Lwt.t =
-          Lwt.catch ( fun () ->
-              accept conf server >>=
-              process_accept ~timeout callback)
-            (function
-            | Lwt.Canceled ->
-              Uwt.Tcp.close_noerr server; (* todo: more graceful *)
-              Lwt.wakeup_exn waker Lwt.Canceled;
-              Lwt.return_unit
-            | _ -> Lwt.return_unit)
-        in
-        ()
-    in
-    let er = Uwt.Tcp.listen server ~max:nconn ~cb in
-    if Uwt.Int_result.is_error er then
-      let () = Uwt.Tcp.close_noerr server in
-      Uwt.Int_result.to_exn ~name:"tcp_listen" er
-      |> Lwt.fail
-    else
-      let () =
-        async (fun () ->
-            stop >>= fun () ->
-            Uwt.Tcp.close_noerr server;
-            Lwt.wakeup waker ();
-            return_unit)
-      in
-      sleeper
+    Conduit_uwt_ssl_tls_common.init_server
+      ?nconn ?stop ?timeout callback accept conf server
 end

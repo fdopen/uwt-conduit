@@ -24,4 +24,4 @@ depends: [
   "ocamlfind" {build}
   "omake" {build}
 ]
-depopts: [ "uwt-tls" ]
+depopts: [ "uwt-tls" "uwt-ssl" ]

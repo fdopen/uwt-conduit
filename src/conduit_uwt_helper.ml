@@ -26,3 +26,8 @@ let try_init_tcp ?sa f =
           Uwt.Tcp.bind_exn t ~addr () );
         f t )
     ( fun exn -> Uwt.Tcp.close_noerr t; Lwt.fail exn )
+
+let safe_close t =
+  Lwt.catch
+    (fun () -> Uwt_io.close t)
+    (fun _ -> Lwt.return_unit)

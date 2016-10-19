@@ -13,20 +13,32 @@ else
 META_REQUIRES=conduit.lwt uwt.ext sexplib ipaddr.unix uri.services $(RESULT_PKG)
 OCAMLPACKS+= uwt.ext conduit.lwt sexplib ppx_sexp_conv
 
+
+PP_ADD_FLAGS=
 if $(equal $(HAVE_TLS), true)
-	OCAMLFINDFLAGS+= -pp "cppo -D HAVE_LWT_TLS"
+	PP_ADD_FLAGS+=-D HAVE_LWT_TLS
 	export
-else
-	OCAMLFINDFLAGS+= -pp cppo
+if $(equal $(HAVE_SSL), true)
+	PP_ADD_FLAGS+=-D HAVE_LWT_SSL
 	export
+
+OCAMLFINDFLAGS+= -pp "cppo $(PP_ADD_FLAGS)"
 
 section
 	FILES= conduit_uwt resolver_uwt conduit_uwt_helper
+	if $(or $(equal $(HAVE_TLS), true), $(equal $(HAVE_SSL), true))
+		FILES+= conduit_uwt_ssl_tls_common
+		export
 	if $(equal $(HAVE_TLS), true)
 		export
 		OCAMLPACKS+= uwt-tls uwt-random.nocrypto-entropy
 		FILES+= conduit_uwt_tls
 		META_REQUIRES+= uwt-tls uwt-random.nocrypto-entropy
+	if $(equal $(HAVE_SSL), true)
+		export
+		OCAMLPACKS+= uwt-ssl
+		FILES+= conduit_uwt_ssl
+		META_REQUIRES+= uwt-ssl
 	Repeat_targets($(FILES))
 	CONDUIT=$(MOCamlLibrary $(PROJNAME),$(FILES))
 	lib:: $(CONDUIT)
