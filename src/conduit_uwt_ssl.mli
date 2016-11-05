@@ -37,7 +37,7 @@ module Server : sig
 
   val init :
     ?ctx:Ssl.context ->
-    ?nconn:int ->
+    ?backlog:int ->
     ?password:(bool -> string) ->
     certfile:string ->
     keyfile:string ->

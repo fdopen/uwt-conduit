@@ -23,8 +23,23 @@ open Conduit_uwt_helper
 let _ = Ssl.init ()
 
 let chans_of_fd sock =
-  let oc = Uwt_ssl.out_channel_of_descr sock in
-  let ic = Uwt_ssl.in_channel_of_descr sock in
+  let shutdown () = Uwt_ssl.ssl_shutdown sock in
+  let close () =
+    Uwt_ssl.close_noerr sock;
+    Lwt.return_unit
+  in
+  let oc =
+    Uwt_io.make
+      ~mode:Uwt_io.output
+      ~close:shutdown
+      (fun buf pos len -> Uwt_ssl.write_ba ~pos ~len sock ~buf)
+  in
+  let ic =
+    Uwt_io.make
+      ~mode:Uwt_io.input
+      ~close
+      (fun buf pos len -> Uwt_ssl.read_ba ~len ~pos sock ~buf)
+  in
   Uwt_ssl.get_tcp_t sock, ic, oc
 
 module Client = struct
@@ -33,15 +48,10 @@ module Client = struct
   let () = Ssl.disable_protocols t [Ssl.SSLv23]
 
   let connect ?(ctx=t) ?src addr =
-    try_init_tcp ( fun fd ->
-        (match src with
-        | None -> ();
-        | Some src_sa -> Uwt.Tcp.bind_exn fd ~addr:src_sa ());
-        Lwt.return fd
-      ) >>= fun t ->
+    try_init_tcp ?sa:src @@ fun t ->
     Uwt.Tcp.connect t ~addr >>= fun () ->
-    Uwt_ssl.ssl_connect t ctx >>= fun sock ->
-    Lwt.return (chans_of_fd sock)
+    Uwt_ssl.ssl_connect t ctx >|= fun sock ->
+    chans_of_fd sock
 end
 
 module Server = struct
@@ -50,14 +60,13 @@ module Server = struct
   let () = Ssl.disable_protocols t [Ssl.SSLv23]
 
   let accept_real ctx t =
-    Lwt.wrap1 Uwt.Tcp.accept_exn t >>= fun at ->
-    Lwt.try_bind (fun () -> Uwt_ssl.ssl_accept at ctx)
-      (fun sock -> Lwt.return (chans_of_fd sock))
-      (fun exn -> Uwt.Tcp.close_noerr at; Lwt.fail exn)
+    accept_close_on_exn t @@ fun at ->
+    Uwt_ssl.ssl_accept at ctx >|= fun sock ->
+    chans_of_fd sock
 
   let accept ?(ctx=t) t = accept_real ctx t
 
-  let init ?(ctx=t) ?nconn ?password ~certfile ~keyfile
+  let init ?(ctx=t) ?backlog ?password ~certfile ~keyfile
       ?stop ?timeout sa callback =
     (match password with
      | None -> ()
@@ -65,5 +74,5 @@ module Server = struct
     Ssl.use_certificate ctx certfile keyfile;
     try_init_tcp ~sa Lwt.return >>= fun server ->
     Conduit_uwt_ssl_tls_common.init_server
-      ?nconn ?stop ?timeout callback accept_real ctx server
+      ?backlog ?stop ?timeout callback accept_real ctx server
 end

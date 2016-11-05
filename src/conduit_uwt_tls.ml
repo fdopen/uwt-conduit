@@ -25,29 +25,25 @@ open Conduit_uwt_helper
 module Client = struct
   let connect ?src host sa =
     rand_init >>= fun () ->
-    try_init_tcp ( fun fd ->
-        (match src with
-        | None -> ();
-        | Some src_sa -> Uwt.Tcp.bind_exn fd ~addr:src_sa ());
-        Lwt.return fd
-      ) >>= fun fd ->
+    try_init_tcp ?sa:src @@ fun fd ->
     X509_uwt.authenticator `No_authentication_I'M_STUPID >>= fun authenticator ->
     let config = Tls.Config.client ~authenticator () in
     Uwt.Tcp.connect fd ~addr:sa >>= fun () ->
     Tls_uwt.Unix.client_of_fd config ~host fd >|= fun t ->
     let ic, oc = Tls_uwt.of_t t in
     (fd, ic, oc)
+
 end
 
 module Server = struct
 
   let accept config s =
-    Lwt.wrap1 Uwt.Tcp.accept_exn s >>= fun fd ->
+    accept_close_on_exn s @@ fun fd ->
     Tls_uwt.Unix.server_of_fd config fd >|= fun t ->
     let ic, oc = Tls_uwt.of_t t in
     (fd, ic, oc)
 
-  let init ?nconn ~certfile ~keyfile ?stop ?timeout sa callback =
+  let init ?backlog ~certfile ~keyfile ?stop ?timeout sa callback =
     rand_init >>= fun () ->
     X509_uwt.private_of_pems ~cert:certfile ~priv_key:keyfile >>= fun cert ->
     (match Tls.Config.server ~certificates:(`Single cert) () with
@@ -55,5 +51,5 @@ module Server = struct
     | y -> Lwt.return y) >>= fun conf ->
     try_init_tcp ~sa Lwt.return >>= fun server ->
     Conduit_uwt_ssl_tls_common.init_server
-      ?nconn ?stop ?timeout callback accept conf server
+      ?backlog ?stop ?timeout callback accept conf server
 end

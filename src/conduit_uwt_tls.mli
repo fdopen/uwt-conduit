@@ -33,7 +33,7 @@ module Server : sig
     (Uwt.Tcp.t * Uwt_io.input_channel * Uwt_io.output_channel) Lwt.t
 
   val init :
-    ?nconn:int ->
+    ?backlog:int ->
     certfile:string ->
     keyfile:string ->
     ?stop:(unit Lwt.t) ->

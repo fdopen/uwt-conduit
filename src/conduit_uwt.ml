@@ -159,52 +159,37 @@ let init ?src ?(tls_server_key=`None) () =
     | Ok ({Uwt.Dns.ai_addr;_}::_) ->
       Lwt.return { src= Some ai_addr; tls_server_key }
 
-let try_init_pipe f =
+let try_init_pipe ?sa f =
   let t = Uwt.Pipe.init () in
   Lwt.catch
-    ( fun () -> f t )
+    ( fun () ->
+        (match sa with
+        | None -> ()
+        | Some src_sa ->
+          Uwt.Pipe.bind_exn t ~path:src_sa);
+        f t
+    )
     ( fun exn -> Uwt.Pipe.close_noerr t; Lwt.fail exn )
 
 (* Vanilla sockaddr connection *)
 module Sockaddr_client = struct
   let connect_tcp ?src sa =
-    try_init_tcp ( fun st ->
-        (match src with
-        | None -> ();
-        | Some addr -> Uwt.Tcp.bind_exn st ~addr ());
-        Uwt.Tcp.connect st ~addr:sa >|= fun () ->
-        let ic = Uwt_io.of_tcp ~mode:Uwt_io.input st in
-        let oc = Uwt_io.of_tcp ~mode:Uwt_io.output st in
-        st, ic, oc)
+    try_init_tcp ?sa:src @@ fun st ->
+    Uwt.Tcp.connect st ~addr:sa >|= fun () ->
+    let ic = Uwt_io.of_tcp ~mode:Uwt_io.input st in
+    let oc = Uwt_io.of_tcp ~mode:Uwt_io.output st in
+    st, ic, oc
 
   let connect_pipe ?src path =
-    try_init_pipe ( fun st ->
-        (match src with
-        | None -> ()
-        | Some src_sa ->
-          Uwt.Pipe.bind_exn st ~path:src_sa);
-        Uwt.Pipe.connect st ~path >|= fun () ->
-        let ic = Uwt_io.of_pipe ~mode:Uwt_io.input st in
-        let oc = Uwt_io.of_pipe ~mode:Uwt_io.output st in
-        st, ic, oc )
-end
-
-module Sockaddr_server = struct
-  let process_accept c ic oc timeout =
-    let f () =
-      match timeout with
-      | None -> c
-      | Some t -> Lwt.pick [ c ; Uwt.Timer.sleep (t * 1000) ]
-    in
-    let _ : unit Lwt.t = (* result ignored upstream *)
-      Lwt.finalize f
-        ( fun () -> safe_close oc >>= fun () -> safe_close ic )
-    in
-    ()
+    try_init_pipe ?sa:src @@ fun st ->
+    Uwt.Pipe.connect st ~path >|= fun () ->
+    let ic = Uwt_io.of_pipe ~mode:Uwt_io.input st in
+    let oc = Uwt_io.of_pipe ~mode:Uwt_io.output st in
+    st, ic, oc
 end
 
 module Sockaddr_server_tcp = struct
-  let init ~sockaddr ?(stop = fst (Lwt.wait ())) ?timeout callback =
+  let init ?(backlog=128) ~sockaddr ?(stop = fst (Lwt.wait ())) ?timeout callback =
     try_init_tcp ~sa:sockaddr Lwt.return >>= fun server ->
     let sleeper,waker = Lwt.wait () in
     let abort exn =
@@ -223,12 +208,9 @@ module Sockaddr_server_tcp = struct
           let _ : unit Uwt.Int_result.t = Uwt.Tcp.nodelay client true in
           let ic = Uwt_io.of_tcp ~mode:Uwt_io.input client
           and oc = Uwt_io.of_tcp ~mode:Uwt_io.output client in
-          match callback client ic oc with
-          | exception x -> Uwt.Tcp.close_noerr client ; abort x
-          | c -> Sockaddr_server.process_accept c ic oc timeout
+          process_accept ic oc timeout callback client
     in
-    (* dubious magic value 15 is from upstream source, why not more? *)
-    let er = Uwt.Tcp.listen server ~max:15 ~cb in
+    let er = Uwt.Tcp.listen server ~max:backlog ~cb in
     if Uwt.Int_result.is_error er then
       let () = Uwt.Tcp.close_noerr server in
       Uwt.Int_result.to_exn ~name:"tcp_listen" er
@@ -246,9 +228,8 @@ module Sockaddr_server_pipe = struct
   (* TODO: this code duplication is really ugly.
      But my first attempt to functorize led to even uglier code,
      because Uwt.Pipe and Uwt.Tcp have slightly different apis.. *)
-  let init ~path ?(stop = fst (Lwt.wait ())) ?timeout callback =
-    try_init_pipe (fun s -> Uwt.Pipe.bind_exn s ~path; Lwt.return s)
-    >>= fun server ->
+  let init ?(backlog=128) ~path ?(stop = fst (Lwt.wait ())) ?timeout callback =
+    try_init_pipe ~sa:path Lwt.return >>= fun server ->
     let sleeper,waker = Lwt.wait () in
     let abort exn =
       Uwt.Pipe.close_noerr server;
@@ -266,11 +247,9 @@ module Sockaddr_server_pipe = struct
         else
           let ic = Uwt_io.of_pipe ~mode:Uwt_io.input client
           and oc = Uwt_io.of_pipe ~mode:Uwt_io.output client in
-          match callback client ic oc with
-          | exception x -> Uwt.Pipe.close_noerr client ; abort x
-          | c -> Sockaddr_server.process_accept c ic oc timeout
+          process_accept ic oc timeout callback client
     in
-    let er = Uwt.Pipe.listen server ~max:15 ~cb in
+    let er = Uwt.Pipe.listen server ~max:backlog ~cb in
     if Uwt.Int_result.is_error er then
       let () = Uwt.Pipe.close_noerr server in
       Uwt.Int_result.to_exn ~name:"pipe_listen" er |> Lwt.fail
@@ -354,7 +333,7 @@ let sockaddr_on_tcp_port ctx port =
   | None -> ADDR_INET (inet_addr_any,port), Ipaddr.(V4 V4.any)
 
 #ifdef HAVE_LWT_SSL
-let serve_with_openssl ?timeout ?stop ~ctx ~certfile ~keyfile
+let serve_with_openssl ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
                        ~pass ~port callback t =
   let sockaddr, ip = sockaddr_on_tcp_port ctx port in
   let password =
@@ -363,17 +342,17 @@ let serve_with_openssl ?timeout ?stop ~ctx ~certfile ~keyfile
     | `Password fn -> Some fn
   in
   Conduit_uwt_ssl.Server.init
-    ?password ~certfile ~keyfile ?timeout ?stop sockaddr
+    ?backlog ?password ~certfile ~keyfile ?timeout ?stop sockaddr
     (fun fd ic oc -> callback (TCP {fd;ip;port}) ic oc) >>= fun () ->
   t
 #else
-let serve_with_openssl ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
+let serve_with_openssl ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
                        ~pass:_ ~port:_ _ _ =
   fail (Failure "No SSL support compiled into Conduit")
 #endif
 
 #ifdef HAVE_LWT_TLS
-let serve_with_tls_native ?timeout ?stop ~ctx ~certfile ~keyfile
+let serve_with_tls_native ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
                           ~pass ~port callback t =
   let sockaddr, ip = sockaddr_on_tcp_port ctx port in
   (match pass with
@@ -381,11 +360,11 @@ let serve_with_tls_native ?timeout ?stop ~ctx ~certfile ~keyfile
     | `Password _ -> fail (Failure "OCaml-TLS cannot handle encrypted pem files")
   ) >>= fun () ->
   Conduit_uwt_tls.Server.init
-    ~certfile ~keyfile ?timeout ?stop sockaddr
+    ~certfile ~keyfile ?backlog ?timeout ?stop sockaddr
     (fun fd ic oc -> callback (TCP {fd;ip;port}) ic oc)
   >>= fun () -> t
 #else
-let serve_with_tls_native ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
+let serve_with_tls_native ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
                           ~pass:_ ~port:_ _ _ =
   fail (Failure "No TLS support compiled into Conduit")
 #endif
@@ -399,17 +378,16 @@ let serve_with_default_tls ?timeout ?stop ~ctx ~certfile ~keyfile
                                    ~pass ~port callback t
   | No_tls -> fail (Failure "No SSL or TLS support compiled into Conduit")
 
-let serve ?timeout ?stop ~(ctx:ctx) ~(mode:server) callback =
+let serve ?backlog ?timeout ?stop ~(ctx:ctx) ~(mode:server) callback =
   let t, _u = Lwt.task () in (* End this via Lwt.cancel *)
-  Lwt.on_cancel t (fun () -> print_endline "Terminating server thread");
   match mode with
   | `TCP (`Port port) ->
        let sockaddr, ip = sockaddr_on_tcp_port ctx port in
-       Sockaddr_server_tcp.init ~sockaddr ?timeout ?stop
+       Sockaddr_server_tcp.init ?backlog ~sockaddr ?timeout ?stop
          (fun fd ic oc -> callback (TCP {fd; ip; port}) ic oc)
        >>= fun () -> t
   | `Unix_domain_socket (`File path) ->
-     Sockaddr_server_pipe.init ~path ?timeout ?stop
+     Sockaddr_server_pipe.init ?backlog ~path ?timeout ?stop
        (fun fd ic oc -> callback (Domain_socket {fd;path}) ic oc)
      >>= fun () -> t
   | `TLS (`Crt_file_path certfile, `Key_file_path keyfile, pass, `Port port) ->
@@ -417,11 +395,11 @@ let serve ?timeout ?stop ~(ctx:ctx) ~(mode:server) callback =
                             ~pass ~port callback t
   | `OpenSSL (`Crt_file_path certfile, `Key_file_path keyfile,
               pass, `Port port) ->
-     serve_with_openssl ?timeout ?stop ~ctx ~certfile ~keyfile
+     serve_with_openssl ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
                         ~pass ~port callback t
   | `TLS_native (`Crt_file_path certfile, `Key_file_path keyfile,
                  pass, `Port port) ->
-     serve_with_tls_native ?timeout ?stop ~ctx ~certfile ~keyfile
+     serve_with_tls_native ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
                            ~pass ~port callback t
   |`Vchan_direct (domid, sport) ->
 #ifdef HAVE_VCHAN_LWT

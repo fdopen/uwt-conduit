@@ -16,6 +16,7 @@
  *
  *)
 
+open Lwt.Infix
 let try_init_tcp ?sa f =
   let t = Uwt.Tcp.init () in
   Lwt.catch
@@ -27,7 +28,27 @@ let try_init_tcp ?sa f =
         f t )
     ( fun exn -> Uwt.Tcp.close_noerr t; Lwt.fail exn )
 
+let accept_close_on_exn server f =
+  Lwt.wrap1 Uwt.Tcp.accept_exn server >>= fun t ->
+  Lwt.catch ( fun () -> f t ) (fun e -> Uwt.Tcp.close_noerr t ; Lwt.fail e)
+
 let safe_close t =
   Lwt.catch
     (fun () -> Uwt_io.close t)
     (fun _ -> Lwt.return_unit)
+
+let process_accept ic oc timeout cb cl =
+  let close ~ic ~oc () =
+    safe_close oc >>= fun () -> safe_close ic
+  in
+  match cb cl ic oc with
+  | exception x ->
+    !Lwt.async_exception_hook x;
+    let _ : unit Lwt.t = close ~ic ~oc () in ()
+  | c ->
+    let f () =
+      match timeout with
+      | None -> c
+      | Some t -> Lwt.pick [ c ; Uwt.Timer.sleep (t * 1000) ]
+    in
+    Lwt.finalize f (close ~ic ~oc) |> Lwt.ignore_result

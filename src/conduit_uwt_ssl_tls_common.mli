@@ -1,6 +1,6 @@
 (* internal only *)
 val init_server :
-  ?nconn:int ->
+  ?backlog:int ->
   ?stop:unit Lwt.t ->
   ?timeout:int ->
   ('a -> 'b Uwt_io.channel -> 'c Uwt_io.channel -> unit Lwt.t) ->
