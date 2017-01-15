@@ -20,6 +20,7 @@
 (** TLS/SSL connections via {{:http://www.openssl.org}OpenSSL} C bindings *)
 
 module Client : sig
+  val default_ctx : Ssl.context
 
   val connect :
     ?ctx:Ssl.context ->
@@ -30,12 +31,9 @@ module Client : sig
 end
 
 module Server : sig
-  val accept :
-    ?ctx:Ssl.context ->
-    Uwt.Tcp.t ->
-    (Uwt.Tcp.t * Uwt_io.input_channel * Uwt_io.output_channel) Lwt.t
 
   val init :
+    ?on_exn:(exn -> unit) ->
     ?ctx:Ssl.context ->
     ?backlog:int ->
     ?password:(bool -> string) ->

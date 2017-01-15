@@ -37,14 +37,16 @@ let safe_close t =
     (fun () -> Uwt_io.close t)
     (fun _ -> Lwt.return_unit)
 
-let process_accept ic oc timeout cb cl =
+let default_on_exn exn = !Lwt.async_exception_hook exn
+let process_accept ?(on_exn=default_on_exn)
+    ic oc timeout cb cl =
   let close ~ic ~oc () =
     safe_close oc >>= fun () -> safe_close ic
   in
   match cb cl ic oc with
   | exception x ->
-    !Lwt.async_exception_hook x;
-    let _ : unit Lwt.t = close ~ic ~oc () in ()
+    let _ : unit Lwt.t = close ~ic ~oc () in
+    on_exn x
   | c ->
     let f () =
       match timeout with

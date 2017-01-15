@@ -17,9 +17,9 @@
  *
  *)
 
-open Lwt
+open Lwt.Infix
 open Sexplib.Conv
-open Conduit_uwt_helper
+module H = Conduit_uwt_helper
 
 let debug = ref false
 let debug_print = ref Printf.eprintf
@@ -149,13 +149,13 @@ let default_ctx =
 let init ?src ?(tls_server_key=`None) () =
   match src with
   | None ->
-    return { src=None; tls_server_key }
+    Lwt.return { src=None; tls_server_key }
   | Some host ->
     Uwt.Dns.getaddrinfo ~host
       ~service:"0"
       [Unix.AI_PASSIVE;Unix.AI_SOCKTYPE Unix.SOCK_STREAM] >>= function
     | Ok []
-    | Error _ -> fail (Failure "Invalid conduit source address specified")
+    | Error _ -> Lwt.fail (Failure "Invalid conduit source address specified")
     | Ok ({Uwt.Dns.ai_addr;_}::_) ->
       Lwt.return { src= Some ai_addr; tls_server_key }
 
@@ -174,7 +174,7 @@ let try_init_pipe ?sa f =
 (* Vanilla sockaddr connection *)
 module Sockaddr_client = struct
   let connect_tcp ?src sa =
-    try_init_tcp ?sa:src @@ fun st ->
+    H.try_init_tcp ?sa:src @@ fun st ->
     Uwt.Tcp.connect st ~addr:sa >|= fun () ->
     let ic = Uwt_io.of_tcp ~mode:Uwt_io.input st in
     let oc = Uwt_io.of_tcp ~mode:Uwt_io.output st in
@@ -188,9 +188,18 @@ module Sockaddr_client = struct
     st, ic, oc
 end
 
+let dummy_ip = Ipaddr_unix.of_inet_addr Unix.inet_addr_loopback
+let dummy_port = 0
+let flow_of_tcp client =
+  match Uwt.Tcp.getpeername client with
+  | Ok (Unix.ADDR_INET(ip,port)) ->
+    TCP { fd = client ; ip = Ipaddr_unix.of_inet_addr ip ; port }
+  | Ok (Unix.ADDR_UNIX _) | Error _ ->
+    TCP { fd = client ; ip = dummy_ip ; port = dummy_port }
+
 module Sockaddr_server_tcp = struct
-  let init ?(backlog=128) ~sockaddr ?(stop = fst (Lwt.wait ())) ?timeout callback =
-    try_init_tcp ~sa:sockaddr Lwt.return >>= fun server ->
+  let init ?on_exn ?(backlog=128) ~sockaddr ?(stop = fst (Lwt.wait ())) ?timeout callback =
+    H.try_init_tcp ~sa:sockaddr Lwt.return >>= fun server ->
     let sleeper,waker = Lwt.wait () in
     let abort exn =
       Uwt.Tcp.close_noerr server;
@@ -207,8 +216,9 @@ module Sockaddr_server_tcp = struct
              solution? *)
           let _ : unit Uwt.Int_result.t = Uwt.Tcp.nodelay client true in
           let ic = Uwt_io.of_tcp ~mode:Uwt_io.input client
-          and oc = Uwt_io.of_tcp ~mode:Uwt_io.output client in
-          process_accept ic oc timeout callback client
+          and oc = Uwt_io.of_tcp ~mode:Uwt_io.output client
+          and c = flow_of_tcp client in
+          H.process_accept ?on_exn ic oc timeout callback c
     in
     let er = Uwt.Tcp.listen server ~max:backlog ~cb in
     if Uwt.Int_result.is_error er then
@@ -216,7 +226,7 @@ module Sockaddr_server_tcp = struct
       Uwt.Int_result.to_exn ~name:"tcp_listen" er
       |> Lwt.fail
     else
-      let () = async @@ fun () ->
+      let () = Lwt.async @@ fun () ->
         stop >|= fun () ->
         Uwt.Tcp.close_noerr server;
         Lwt.wakeup waker ()
@@ -228,7 +238,7 @@ module Sockaddr_server_pipe = struct
   (* TODO: this code duplication is really ugly.
      But my first attempt to functorize led to even uglier code,
      because Uwt.Pipe and Uwt.Tcp have slightly different apis.. *)
-  let init ?(backlog=128) ~path ?(stop = fst (Lwt.wait ())) ?timeout callback =
+  let init ?on_exn ?(backlog=128) ~path ?(stop = fst (Lwt.wait ())) ?timeout callback =
     try_init_pipe ~sa:path Lwt.return >>= fun server ->
     let sleeper,waker = Lwt.wait () in
     let abort exn =
@@ -247,14 +257,19 @@ module Sockaddr_server_pipe = struct
         else
           let ic = Uwt_io.of_pipe ~mode:Uwt_io.input client
           and oc = Uwt_io.of_pipe ~mode:Uwt_io.output client in
-          process_accept ic oc timeout callback client
+          let path = match Uwt.Pipe.getpeername client with
+          | Error _ -> ""
+          | Ok x -> x in
+          H.process_accept
+            ?on_exn ic oc timeout callback
+            (Domain_socket { fd = client; path })
     in
     let er = Uwt.Pipe.listen server ~max:backlog ~cb in
     if Uwt.Int_result.is_error er then
       let () = Uwt.Pipe.close_noerr server in
       Uwt.Int_result.to_exn ~name:"pipe_listen" er |> Lwt.fail
     else
-      let () = async @@ fun () ->
+      let () = Lwt.async @@ fun () ->
         stop >|= fun () ->
         Uwt.Pipe.close_noerr server;
         Lwt.wakeup waker ()
@@ -272,7 +287,7 @@ let connect_with_tls_native ~ctx (`Hostname hostname, `IP ip, `Port port) =
   TCP { fd ; ip ; port }, ic, oc
 #else
 let connect_with_tls_native ~ctx:_ _ =
-   fail (Failure "No TLS support compiled into Conduit")
+   Lwt.fail (Failure "No TLS support compiled into Conduit")
 #endif
 
 #ifdef HAVE_LWT_SSL
@@ -282,28 +297,28 @@ let connect_with_openssl ~ctx (`Hostname _, `IP ip, `Port port) =
   TCP { fd ; ip ; port }, ic, oc
 #else
 let connect_with_openssl ~ctx:_ _ =
-  fail (Failure "No SSL support compiled into Conduit")
+  Lwt.fail (Failure "No SSL support compiled into Conduit")
 #endif
 
 let connect_with_default_tls ~ctx tls_client_config =
   match !tls_library with
   | OpenSSL -> connect_with_openssl ~ctx tls_client_config
   | Native -> connect_with_tls_native ~ctx tls_client_config
-  | No_tls -> fail (Failure "No SSL or TLS support compiled into Conduit")
+  | No_tls -> Lwt.fail (Failure "No SSL or TLS support compiled into Conduit")
 
 (** VChan connection functions *)
 #ifdef HAVE_VCHAN_LWT
 let connect_with_vchan_lwt ~ctx (`Domid domid, `Port sport) =
   (match Vchan.Port.of_string sport with
-   | `Error s -> fail (Failure ("Invalid vchan port: " ^ s))
-   | `Ok p -> return p)
+   | `Error s -> Lwt.fail (Failure ("Invalid vchan port: " ^ s))
+   | `Ok p -> Lwt.return p)
   >>= fun port ->
   let flow = Vchan { domid; port=sport } in
   Vchan_lwt_unix.open_client ~domid ~port () >>= fun (ic, oc) ->
-  return (flow, ic, oc)
+  Lwt.return (flow, ic, oc)
 #else
 let connect_with_vchan_lwt ~ctx:_ _ =
-  fail (Failure "No Vchan support compiled into Conduit")
+  Lwt.fail (Failure "No Vchan support compiled into Conduit")
 #endif
 
 (** Main connection function *)
@@ -323,98 +338,91 @@ let connect ~ctx (mode:client) =
   | `TLS_native c -> connect_with_tls_native ~ctx c
   | `Vchan_direct c -> connect_with_vchan_lwt ~ctx c
   | `Vchan_domain_socket _uuid ->
-     fail (Failure "Vchan_domain_socket not implemented")
+     Lwt.fail (Failure "Vchan_domain_socket not implemented")
 
 let sockaddr_on_tcp_port ctx port =
   let open Unix in
   match ctx.src with
   | Some (ADDR_UNIX _) -> raise (Failure "Cant listen to TCP on a domain socket")
-  | Some (ADDR_INET (a,_)) -> ADDR_INET (a,port), Ipaddr_unix.of_inet_addr a
-  | None -> ADDR_INET (inet_addr_any,port), Ipaddr.(V4 V4.any)
+  | Some (ADDR_INET (a,_)) -> ADDR_INET (a,port)
+  | None -> ADDR_INET (inet_addr_any,port)
 
 #ifdef HAVE_LWT_SSL
-let serve_with_openssl ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
-                       ~pass ~port callback t =
-  let sockaddr, ip = sockaddr_on_tcp_port ctx port in
+let serve_with_openssl ?on_exn ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
+                       ~pass ~port callback =
+  let sockaddr = sockaddr_on_tcp_port ctx port in
   let password =
     match pass with
     | `No_password -> None
     | `Password fn -> Some fn
   in
   Conduit_uwt_ssl.Server.init
-    ?backlog ?password ~certfile ~keyfile ?timeout ?stop sockaddr
-    (fun fd ic oc -> callback (TCP {fd;ip;port}) ic oc) >>= fun () ->
-  t
+    ?on_exn ?backlog ?password ~certfile ~keyfile ?timeout ?stop sockaddr
+    (fun fd ic oc -> callback (flow_of_tcp fd) ic oc)
 #else
-let serve_with_openssl ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
-                       ~pass:_ ~port:_ _ _ =
-  fail (Failure "No SSL support compiled into Conduit")
+let serve_with_openssl ?on_exn:_ ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_
+    ~keyfile:_ ~pass:_ ~port:_ _ =
+  Lwt.fail (Failure "No SSL support compiled into Conduit")
 #endif
 
 #ifdef HAVE_LWT_TLS
-let serve_with_tls_native ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
-                          ~pass ~port callback t =
-  let sockaddr, ip = sockaddr_on_tcp_port ctx port in
+let serve_with_tls_native ?on_exn ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
+                          ~pass ~port callback =
+  let sockaddr = sockaddr_on_tcp_port ctx port in
   (match pass with
-    | `No_password -> return ()
-    | `Password _ -> fail (Failure "OCaml-TLS cannot handle encrypted pem files")
+    | `No_password -> Lwt.return ()
+    | `Password _ -> Lwt.fail (Failure "OCaml-TLS cannot handle encrypted pem files")
   ) >>= fun () ->
   Conduit_uwt_tls.Server.init
-    ~certfile ~keyfile ?backlog ?timeout ?stop sockaddr
-    (fun fd ic oc -> callback (TCP {fd;ip;port}) ic oc)
-  >>= fun () -> t
+    ?on_exn ~certfile ~keyfile ?backlog ?timeout ?stop sockaddr
+    (fun fd ic oc -> callback (flow_of_tcp fd) ic oc)
 #else
-let serve_with_tls_native ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_ ~certfile:_ ~keyfile:_
-                          ~pass:_ ~port:_ _ _ =
-  fail (Failure "No TLS support compiled into Conduit")
+let serve_with_tls_native ?on_exn:_ ?backlog:_ ?timeout:_ ?stop:_ ~ctx:_
+    ~certfile:_ ~keyfile:_ ~pass:_ ~port:_ _ =
+  Lwt.fail (Failure "No TLS support compiled into Conduit")
 #endif
 
-let serve_with_default_tls ?timeout ?stop ~ctx ~certfile ~keyfile
-                           ~pass ~port callback t =
+let serve_with_default_tls ?on_exn ?timeout ?stop ~ctx ~certfile ~keyfile
+                           ~pass ~port callback : unit Lwt.t =
   match !tls_library with
-  | OpenSSL -> serve_with_openssl ?timeout ?stop ~ctx ~certfile ~keyfile
-                                 ~pass ~port callback t
-  | Native -> serve_with_tls_native ?timeout ?stop ~ctx ~certfile ~keyfile
-                                   ~pass ~port callback t
-  | No_tls -> fail (Failure "No SSL or TLS support compiled into Conduit")
+  | OpenSSL -> serve_with_openssl ?on_exn ?timeout ?stop ~ctx ~certfile ~keyfile
+                                 ~pass ~port callback
+  | Native -> serve_with_tls_native ?on_exn ?timeout ?stop ~ctx ~certfile ~keyfile
+                                   ~pass ~port callback
+  | No_tls -> Lwt.fail (Failure "No SSL or TLS support compiled into Conduit")
 
-let serve ?backlog ?timeout ?stop ~(ctx:ctx) ~(mode:server) callback =
-  let t, _u = Lwt.task () in (* End this via Lwt.cancel *)
+let serve ?backlog ?timeout ?stop ?on_exn ~(ctx:ctx) ~(mode:server) callback =
   match mode with
   | `TCP (`Port port) ->
-       let sockaddr, ip = sockaddr_on_tcp_port ctx port in
-       Sockaddr_server_tcp.init ?backlog ~sockaddr ?timeout ?stop
-         (fun fd ic oc -> callback (TCP {fd; ip; port}) ic oc)
-       >>= fun () -> t
+    let sockaddr = sockaddr_on_tcp_port ctx port in
+    Sockaddr_server_tcp.init ?on_exn ?backlog ~sockaddr ?timeout ?stop callback
   | `Unix_domain_socket (`File path) ->
-     Sockaddr_server_pipe.init ?backlog ~path ?timeout ?stop
-       (fun fd ic oc -> callback (Domain_socket {fd;path}) ic oc)
-     >>= fun () -> t
+    Sockaddr_server_pipe.init ?on_exn ?backlog ~path ?timeout ?stop callback
   | `TLS (`Crt_file_path certfile, `Key_file_path keyfile, pass, `Port port) ->
-     serve_with_default_tls ?timeout ?stop ~ctx ~certfile ~keyfile
-                            ~pass ~port callback t
+    serve_with_default_tls ?on_exn ?timeout ?stop ~ctx ~certfile ~keyfile
+      ~pass ~port callback
   | `OpenSSL (`Crt_file_path certfile, `Key_file_path keyfile,
               pass, `Port port) ->
-     serve_with_openssl ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
-                        ~pass ~port callback t
+    serve_with_openssl ?on_exn ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
+       ~pass ~port callback
   | `TLS_native (`Crt_file_path certfile, `Key_file_path keyfile,
                  pass, `Port port) ->
-     serve_with_tls_native ?backlog ?timeout ?stop ~ctx ~certfile ~keyfile
-                           ~pass ~port callback t
+    serve_with_tls_native ?on_exn ?backlog ?timeout ?stop ~ctx ~certfile
+      ~keyfile ~pass ~port callback
   |`Vchan_direct (domid, sport) ->
 #ifdef HAVE_VCHAN_LWT
     begin match Vchan.Port.of_string sport with
-      | `Error s -> fail (Failure ("Invalid vchan port: " ^ s))
-      | `Ok p -> return p
+      | `Error s -> Lwt.fail (Failure ("Invalid vchan port: " ^ s))
+      | `Ok p -> Lwt.return p
     end >>= fun port ->
     Vchan_lwt_unix.open_server ~domid ~port () >>= fun (ic, oc) ->
     callback (Vchan {domid; port=sport}) ic oc
 #else
     let _ = domid and _ = sport in
-    fail (Failure "No Vchan support compiled into Conduit")
+    Lwt.fail (Failure "No Vchan support compiled into Conduit")
 #endif
   | `Vchan_domain_socket _ ->
-    fail (Failure "Vchan_domain_socket not implemented")
+    Lwt.fail (Failure "Vchan_domain_socket not implemented")
 
 let endp_of_flow = function
   | TCP { ip; port; _ } -> `TCP (ip, port)
@@ -426,33 +434,33 @@ let endp_of_flow = function
     concrete implementation of type [client] *)
 let endp_to_client ~ctx:_ (endp:Conduit.endp) : client Lwt.t =
   match endp with
-  | `TCP (ip, port) -> return (`TCP (`IP ip, `Port port))
-  | `Unix_domain_socket file -> return (`Unix_domain_socket (`File file))
+  | `TCP (ip, port) -> Lwt.return (`TCP (`IP ip, `Port port))
+  | `Unix_domain_socket file -> Lwt.return (`Unix_domain_socket (`File file))
   | `Vchan_direct (domid, port) ->
-     return (`Vchan_direct (`Domid domid, `Port port))
+     Lwt.return (`Vchan_direct (`Domid domid, `Port port))
   | `Vchan_domain_socket (name, port) ->
-     return (`Vchan_domain_socket (`Domain_name name, `Port port))
+     Lwt.return (`Vchan_domain_socket (`Domain_name name, `Port port))
   | `TLS (host, (`TCP (ip, port))) ->
-     return (`TLS (`Hostname host, `IP ip, `Port port))
+     Lwt.return (`TLS (`Hostname host, `IP ip, `Port port))
   | `TLS (host, endp) -> begin
-       fail (Failure (Printf.sprintf
+       Lwt.fail (Failure (Printf.sprintf
          "TLS to non-TCP currently unsupported: host=%s endp=%s"
          host (Sexplib.Sexp.to_string_hum (Conduit.sexp_of_endp endp))))
   end
-  | `Unknown err -> fail (Failure ("resolution failed: " ^ err))
+  | `Unknown err -> Lwt.fail (Failure ("resolution failed: " ^ err))
 
 let endp_to_server ~ctx (endp:Conduit.endp) =
   match endp with
-  | `Unix_domain_socket path -> return (`Unix_domain_socket (`File path))
+  | `Unix_domain_socket path -> Lwt.return (`Unix_domain_socket (`File path))
   | `TLS (_host, `TCP (_ip, port)) -> begin
        match ctx.tls_server_key with
-       | `None -> fail (Failure "No TLS server key configured")
+       | `None -> Lwt.fail (Failure "No TLS server key configured")
        | `TLS (`Crt_file_path crt, `Key_file_path key, pass) ->
-          return (`TLS (`Crt_file_path crt, `Key_file_path key,
+          Lwt.return (`TLS (`Crt_file_path crt, `Key_file_path key,
             pass, `Port port))
      end
-  | `TCP (_ip, port) -> return (`TCP (`Port port))
-  | `Vchan_direct _ as mode -> return mode
-  | `Vchan_domain_socket _ as mode -> return mode
-  | `TLS (_host, _) -> fail (Failure "TLS to non-TCP currently unsupported")
-  | `Unknown err -> fail (Failure ("resolution failed: " ^ err))
+  | `TCP (_ip, port) -> Lwt.return (`TCP (`Port port))
+  | `Vchan_direct _ as mode -> Lwt.return mode
+  | `Vchan_domain_socket _ as mode -> Lwt.return mode
+  | `TLS (_host, _) -> Lwt.fail (Failure "TLS to non-TCP currently unsupported")
+  | `Unknown err -> Lwt.fail (Failure ("resolution failed: " ^ err))

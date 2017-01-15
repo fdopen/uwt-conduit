@@ -18,7 +18,7 @@
 (*  highly modified for uwt, ah *)
 
 open Lwt.Infix
-open Conduit_uwt_helper
+module H = Conduit_uwt_helper
 
 let _ = Ssl.init ()
 
@@ -44,11 +44,11 @@ let chans_of_fd sock =
 
 module Client = struct
   (* SSL TCP connection *)
-  let t = Ssl.create_context Ssl.SSLv23 Ssl.Client_context
-  let () = Ssl.disable_protocols t [Ssl.SSLv23]
+  let default_ctx = Ssl.create_context Ssl.SSLv23 Ssl.Client_context
+  let () = Ssl.disable_protocols default_ctx [Ssl.SSLv23]
 
-  let connect ?(ctx=t) ?src addr =
-    try_init_tcp ?sa:src @@ fun t ->
+  let connect ?(ctx=default_ctx) ?src addr =
+    H.try_init_tcp ?sa:src @@ fun t ->
     Uwt.Tcp.connect t ~addr >>= fun () ->
     Uwt_ssl.ssl_connect t ctx >|= fun sock ->
     chans_of_fd sock
@@ -59,20 +59,18 @@ module Server = struct
   let t = Ssl.create_context Ssl.SSLv23 Ssl.Server_context
   let () = Ssl.disable_protocols t [Ssl.SSLv23]
 
-  let accept_real ctx t =
-    accept_close_on_exn t @@ fun at ->
+  let accept ctx t =
+    H.accept_close_on_exn t @@ fun at ->
     Uwt_ssl.ssl_accept at ctx >|= fun sock ->
     chans_of_fd sock
 
-  let accept ?(ctx=t) t = accept_real ctx t
-
-  let init ?(ctx=t) ?backlog ?password ~certfile ~keyfile
+  let init ?on_exn ?(ctx=t) ?backlog ?password ~certfile ~keyfile
       ?stop ?timeout sa callback =
     (match password with
      | None -> ()
      | Some fn -> Ssl.set_password_callback ctx fn);
     Ssl.use_certificate ctx certfile keyfile;
-    try_init_tcp ~sa Lwt.return >>= fun server ->
+    H.try_init_tcp ~sa Lwt.return >>= fun server ->
     Conduit_uwt_ssl_tls_common.init_server
-      ?backlog ?stop ?timeout callback accept_real ctx server
+      ?on_exn ?backlog ?stop ?timeout callback accept ctx server
 end

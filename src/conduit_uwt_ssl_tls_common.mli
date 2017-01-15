@@ -1,5 +1,6 @@
 (* internal only *)
 val init_server :
+  ?on_exn:(exn -> unit) ->
   ?backlog:int ->
   ?stop:unit Lwt.t ->
   ?timeout:int ->

@@ -14,7 +14,7 @@ remove: [
 available: [ocaml-version >= "4.02.1"]
 depends: [
   "uwt" {> "0.0.4"}
-  "conduit" {>= "0.12" & < "0.13"}
+  "conduit" {>= "0.14" & < "0.15"}
   "lwt"
   "ppx_sexp_conv" {build}
   "cppo" {build}

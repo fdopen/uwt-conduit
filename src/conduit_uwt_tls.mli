@@ -27,12 +27,9 @@ module Client : sig
 end
 
 module Server : sig
-  val accept :
-    Tls.Config.server ->
-    Uwt.Tcp.t ->
-    (Uwt.Tcp.t * Uwt_io.input_channel * Uwt_io.output_channel) Lwt.t
 
   val init :
+    ?on_exn:(exn -> unit) ->
     ?backlog:int ->
     certfile:string ->
     keyfile:string ->

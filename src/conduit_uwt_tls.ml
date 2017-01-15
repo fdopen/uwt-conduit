@@ -16,16 +16,16 @@
  *
  *)
 
-open Lwt
+open Lwt.Infix
 
 let rand_init = Nocrypto_entropy_uwt.initialize ()
 
-open Conduit_uwt_helper
+module H = Conduit_uwt_helper
 
 module Client = struct
   let connect ?src host sa =
     rand_init >>= fun () ->
-    try_init_tcp ?sa:src @@ fun fd ->
+    H.try_init_tcp ?sa:src @@ fun fd ->
     X509_uwt.authenticator `No_authentication_I'M_STUPID >>= fun authenticator ->
     let config = Tls.Config.client ~authenticator () in
     Uwt.Tcp.connect fd ~addr:sa >>= fun () ->
@@ -38,18 +38,18 @@ end
 module Server = struct
 
   let accept config s =
-    accept_close_on_exn s @@ fun fd ->
+    H.accept_close_on_exn s @@ fun fd ->
     Tls_uwt.Unix.server_of_fd config fd >|= fun t ->
     let ic, oc = Tls_uwt.of_t t in
     (fd, ic, oc)
 
-  let init ?backlog ~certfile ~keyfile ?stop ?timeout sa callback =
+  let init ?on_exn ?backlog ~certfile ~keyfile ?stop ?timeout sa callback =
     rand_init >>= fun () ->
     X509_uwt.private_of_pems ~cert:certfile ~priv_key:keyfile >>= fun cert ->
     (match Tls.Config.server ~certificates:(`Single cert) () with
     |exception x -> Lwt.fail x
     | y -> Lwt.return y) >>= fun conf ->
-    try_init_tcp ~sa Lwt.return >>= fun server ->
+    H.try_init_tcp ~sa Lwt.return >>= fun server ->
     Conduit_uwt_ssl_tls_common.init_server
-      ?backlog ?stop ?timeout callback accept conf server
+      ?on_exn ?backlog ?stop ?timeout callback accept conf server
 end

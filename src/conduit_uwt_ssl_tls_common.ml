@@ -1,6 +1,7 @@
 open Lwt.Infix
 
-let init_server ?(backlog=128) ?(stop = fst (Lwt.wait ()))
+let init_server ?(on_exn=Conduit_uwt_helper.default_on_exn)
+    ?(backlog=128) ?(stop = fst (Lwt.wait ()))
     ?timeout callback accept x server =
   let sleeper,waker = Lwt.wait () in
   let cb server res =
@@ -12,7 +13,7 @@ let init_server ?(backlog=128) ?(stop = fst (Lwt.wait ()))
     let _ : unit Lwt.t =
       Lwt.catch (fun () ->
           accept x server >>= fun (cfd,ic,oc) ->
-          Conduit_uwt_helper.process_accept ic oc timeout callback cfd;
+          Conduit_uwt_helper.process_accept ~on_exn ic oc timeout callback cfd;
           Lwt.return_unit
         )
         (function
@@ -20,7 +21,7 @@ let init_server ?(backlog=128) ?(stop = fst (Lwt.wait ()))
           Uwt.Tcp.close_noerr server;
           Lwt.wakeup waker ();
           Lwt.return_unit
-        | x -> !Lwt.async_exception_hook x ; Lwt.return_unit)
+        | x -> on_exn x ; Lwt.return_unit)
     in
     ()
   in

@@ -19,6 +19,9 @@ static.=
 	HAVE_SSL=
 		t=$(shell-code $(OCAMLFIND) query uwt-ssl)
 		value $(if $(equal $(t),0), true, false)
+	COMPILER_LIBS=$(nth 0,$(shella ocamlfind query compiler-libs))
+
+setenv(OCAMLFIND_IGNORE_DUPS_IN, $(COMPILER_LIBS))
 
 include OMakeIncludes
 
