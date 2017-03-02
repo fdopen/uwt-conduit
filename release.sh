@@ -5,6 +5,7 @@ set -eux
 curdir="$(readlink -f "$0")"
 curdir="$(dirname "$curdir")"
 cd "$curdir"
+omake
 pkg="$(omake -s echo-pkg)"
 mtmpf="$(mktemp -d)"
 trap "rm -rf \"${mtmpf}\"" EXIT
