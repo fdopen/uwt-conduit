@@ -16,7 +16,7 @@
  *
  *)
 
-open Lwt
+open Lwt.Infix
 
 let debug = ref false
 let debug_print = ref Printf.eprintf
@@ -32,7 +32,7 @@ let return_endp name svc uri endp =
      name (Uri.to_string uri)
      (Sexplib.Sexp.to_string_hum (Resolver.sexp_of_service svc))
      (Sexplib.Sexp.to_string_hum (Conduit.sexp_of_endp endp));
-  return endp
+  Lwt.return endp
 
 let is_tls_service =
   (* TODO fill in the blanks. nowhere else to get this information *)
@@ -48,16 +48,16 @@ let system_service name =
        let tls = is_tls_service name in
        Some { Resolver.name; port=s.Unix.s_port; tls })
     (function
-    | Unix.Unix_error(Unix.ENOENT,_,_) -> return_none
-    | e -> fail e)
+    | Unix.Unix_error(Unix.ENOENT,_,_) -> Lwt.return_none
+    | e -> Lwt.fail e)
 
 let static_service name =
   match Uri_services.tcp_port_of_service name with
-  | [] -> return_none
+  | [] -> Lwt.return_none
   | port::_ ->
      let tls = is_tls_service name in
      let svc = { Resolver.name; port; tls } in
-     return (Some svc)
+     Lwt.return (Some svc)
 
 let get_host uri =
   match Uri.host uri with
@@ -87,9 +87,9 @@ let system_resolver service uri =
   | Ok ((hd::_) as al) ->
     (* Difference to lwt solution: prefer ipv4 to ipv6 *)
     let ai_addr =
-      match List.find ( fun x -> x.Uwt.Dns.ai_family = Unix.PF_INET ) al with
-      | exception Not_found -> hd.Uwt.Dns.ai_addr
-      | x -> x.Uwt.Dns.ai_addr
+      match List.find ( fun x -> x.Unix.ai_family = Unix.PF_INET ) al with
+      | exception Not_found -> hd.Unix.ai_addr
+      | x -> x.Unix.ai_addr
     in
     match ai_addr with
     | Unix.ADDR_INET (addr,port) ->

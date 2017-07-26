@@ -10,9 +10,9 @@ else
 	RESULT_PKG = $(EMPTY)
 	export
 
-META_REQUIRES=conduit.lwt uwt.ext sexplib ipaddr.unix uri.services $(RESULT_PKG)
-OCAMLPACKS+= uwt.ext conduit.lwt sexplib ppx_sexp_conv
-
+NPACKS=conduit-lwt uwt.ext sexplib ipaddr.unix uri.services
+META_REQUIRES=$(NPACKS) $(RESULT_PKG)
+OCAMLPACKS+= $(NPACKS) ppx_sexp_conv
 
 PP_ADD_FLAGS=
 if $(equal $(HAVE_TLS), true)

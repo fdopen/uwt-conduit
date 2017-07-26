@@ -1,7 +1,7 @@
 PRJ conduit-uwt
 S src
 B src
-PKG conduit.lwt
+PKG conduit-lwt
 PKG ipaddr.unix
 PKG ppx_sexp_conv
 PKG sexplib
@@ -9,4 +9,4 @@ PKG uri.services
 PKG uwt-random.nocrypto-entropy
 PKG uwt-tls
 PKG uwt-ssl
-PKG uwt.ext
+PKG uwt
