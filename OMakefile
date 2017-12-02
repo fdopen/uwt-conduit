@@ -9,10 +9,18 @@ static.=
 	export
 	if $(not $(equal $(getenv DEBUG_MY_CODE, $(EMPTY)), $(EMPTY)))
 		export
-		OCAMLFLAGS= -g -bin-annot -safe-string -w A-4-42 #-32-33-37-39-48-4 -warn-error A-32-33-37-39-48-4
+		OCAMLFLAGS= -strict-sequence -principal -safe-string -w A-3-4 -warn-error +1..49-3-4-45-27-42-44
 	else
 		export
-		OCAMLFLAGS= -g -bin-annot -safe-string
+		OCAMLFLAGS= -safe-string -warn-error +1..49-3-4-27-42-44
+	if $(equal $(BYTE_ENABLED), true)
+		export
+		OCAMLCFLAGS= -g -bin-annot
+		OCAMLOPTFLAGS= -g
+	else
+		export
+		OCAMLCFLAGS= -g
+		OCAMLOPTFLAGS= -g -bin-annot
 	HAVE_TLS=
 		t=$(shell-code $(OCAMLFIND) query uwt-tls)
 		value $(if $(equal $(t),0), true, false)
